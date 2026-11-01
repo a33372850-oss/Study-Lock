@@ -48,30 +48,57 @@ export const ApkExportModal: React.FC = () => {
     setTimeout(() => setCopiedAppUrl(false), 2500);
   };
 
-  const workflowCode = `name: Build Study Lock APK
+  const workflowCode = `name: Build Android APK
 
 on:
   push:
     branches: [ "main", "master" ]
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build Type'
+        required: true
+        type: choice
+        options:
+          - debug
+          - release
+        default: 'debug'
+      version_name:
+        description: 'Version Name'
+        required: false
+        type: string
+        default: '1.0.0'
+      create_release:
+        description: 'Publish Release'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  build-apk:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-    - uses: gradle/actions/setup-gradle@v3
-    - name: Build APK
-      run: ./gradlew assembleDebug
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: StudyLock-APK
-        path: app/build/outputs/apk/debug/*.apk
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci || npm install
+      - run: npm run build && npx cap sync android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x ./android/gradlew
+      - run: cd android && ./gradlew assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StudyLock-FocusMode-Android-APK
+          path: android/app/build/outputs/apk/**/*.apk
 `;
 
   const copyToClipboard = () => {

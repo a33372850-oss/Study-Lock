@@ -1,0 +1,182 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Select Android APK Build Type'
+        required: true
+        type: choice
+        options:
+          - debug
+          - release
+        default: 'debug'
+      version_name:
+        description: 'Version Name (e.g. 1.0.0)'
+        required: false
+        type: string
+        default: '1.0.0'
+      create_release:
+        description: 'Publish as a GitHub Release? (Optional)'
+        required: false
+        type: boolean
+        default: false
+      release_notes:
+        description: 'Release Notes (Optional)'
+        required: false
+        type: string
+        default: 'Production-ready Android APK for STUDY LOCK – Focus Mode.'
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build & Package Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # Step 1: Check out repository
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Step 2: Set up Node.js environment
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      # Step 3: Install Node.js dependencies
+      - name: Install Node Dependencies
+        run: |
+          echo "Installing application dependencies..."
+          npm ci || npm install
+
+      # Step 4: Compile Web App & Sync Native Android Layer
+      - name: Build Web Application & Sync Capacitor Android
+        run: |
+          echo "Building production web assets..."
+          npm run build
+          echo "Syncing native Android assets with Capacitor..."
+          npx cap sync android
+
+      # Step 5: Set up Java JDK 17
+      - name: Set up Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # Step 6: Set up Gradle Build Cache
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+
+      # Step 7: Grant execute permission for gradlew
+      - name: Grant Execute Permission to gradlew
+        run: chmod +x ./android/gradlew
+
+      # Step 8: Compile Android APK
+      - name: Build Android APK with Gradle
+        env:
+          BUILD_TYPE: ${{ github.event.inputs.build_type || 'debug' }}
+        run: |
+          cd android
+          if [ "$BUILD_TYPE" = "release" ]; then
+            echo "Compiling Release APK..."
+            ./gradlew assembleRelease --stacktrace
+          else
+            echo "Compiling Debug APK..."
+            ./gradlew assembleDebug --stacktrace
+          fi
+
+      # Step 9: Verify APK File Existence, Integrity & Size
+      - name: Verify APK Integrity & Rename
+        id: verify_apk
+        env:
+          BUILD_TYPE: ${{ github.event.inputs.build_type || 'debug' }}
+          VERSION: ${{ github.event.inputs.version_name || '1.0.0' }}
+        run: |
+          mkdir -p build-artifacts
+          
+          # Locate generated APK file
+          APK_FOUND=$(find android/app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+
+          if [ -z "$APK_FOUND" ] || [ ! -f "$APK_FOUND" ]; then
+            echo "::error file=android/app/build.gradle::Build finished without generating a valid .apk file!"
+            exit 1
+          fi
+
+          FILESIZE=$(stat -c%s "$APK_FOUND")
+          echo "Discovered APK: $APK_FOUND (Size: $FILESIZE bytes)"
+
+          # Ensure APK is non-empty and greater than 1MB
+          if [ "$FILESIZE" -lt 1048576 ]; then
+            echo "::error file=$APK_FOUND::APK file size is too small ($FILESIZE bytes). File appears corrupted or empty!"
+            exit 1
+          fi
+
+          FINAL_APK_NAME="StudyLock-FocusMode-v${VERSION}-${BUILD_TYPE}.apk"
+          cp "$APK_FOUND" "build-artifacts/${FINAL_APK_NAME}"
+
+          echo "APK successfully verified and packaged as: build-artifacts/${FINAL_APK_NAME}"
+          echo "apk_path=build-artifacts/${FINAL_APK_NAME}" >> "$GITHUB_OUTPUT"
+          echo "apk_name=${FINAL_APK_NAME}" >> "$GITHUB_OUTPUT"
+
+      # Step 10: Upload Final APK Artifact (Always preserved even if release step fails)
+      - name: Upload APK as Downloadable Artifact
+        if: always() && steps.verify_apk.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: StudyLock-FocusMode-Android-APK
+          path: build-artifacts/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # Step 11: Upload Diagnostic Reports in case of Failure
+      - name: Upload Gradle Failure Reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-failure-reports
+          path: |
+            android/app/build/reports/
+            android/build/reports/
+          retention-days: 7
+
+      # Step 12: Optional GitHub Release (Only triggered when explicitly requested)
+      - name: Create GitHub Release & Attach APK
+        if: github.event.inputs.create_release == 'true' && steps.verify_apk.outcome == 'success'
+        uses: softprops/action-gh-release@v2
+        continue-on-error: true
+        with:
+          tag_name: "v${{ github.event.inputs.version_name || '1.0.0' }}"
+          name: "STUDY LOCK – Focus Mode v${{ github.event.inputs.version_name || '1.0.0' }}"
+          body: |
+            ### STUDY LOCK – Focus Mode Android APK
+
+            ${{ github.event.inputs.release_notes || 'Official Android APK release for STUDY LOCK – Focus Mode.' }}
+
+            #### 📦 Download Android APK
+            Download the attached **${{ steps.verify_apk.outputs.apk_name }}** directly below and install it on your Android phone.
+
+            - **Version:** ${{ github.event.inputs.version_name || '1.0.0' }}
+            - **Platform:** Android 7.0+ (API 24 to 36)
+            - **Architecture:** Universal (arm64-v8a, armeabi-v7a, x86_64)
+          files: |
+            ${{ steps.verify_apk.outputs.apk_path }}
+          draft: false
+          prerelease: false

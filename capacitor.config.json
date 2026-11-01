@@ -1,0 +1,17 @@
+{
+  "appId": "com.studylock.focusmode",
+  "appName": "STUDY LOCK – Focus Mode",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "buildOptions": {
+      "keystorePath": "",
+      "keystorePassword": "",
+      "keystoreAlias": "",
+      "keystoreAliasPassword": "",
+      "releaseType": "AAB"
+    }
+  }
+}
